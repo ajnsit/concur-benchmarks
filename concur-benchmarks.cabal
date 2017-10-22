@@ -30,9 +30,25 @@ executable clickList
                      , concur-core
                      , concur-vdom
                      , ghcjs-vdom
+  default-language:    Haskell2010
+
+executable bench
+  ghc-options:         -Wall -ferror-spans
+  default-language:    Haskell2010
+  hs-source-dirs:      src
+  main-is:             Bench.hs
+  build-depends:       base >= 4.7 && < 5
+                     , mtl >= 2.2
+                     , transformers >= 0.5
+                     , stm >= 2.4
+                     , free >= 4.12
+                     , concur-core
+                     , concur-vdom
+                     , ghcjs-vdom
                      , random
                      , vector
   default-language:    Haskell2010
+
 
   if impl(ghcjs)
     build-depends:     ghcjs-base
