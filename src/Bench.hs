@@ -17,8 +17,8 @@ import qualified Data.JSString                as JSS
 import qualified GHCJS.VDOM.Element as E
 import qualified GHCJS.VDOM.Attribute as A
 
--- import qualified Data.Vector as V
--- import qualified Data.Vector.Mutable as MV
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as MV
 
 import Data.Monoid ((<>))
 
@@ -29,14 +29,14 @@ import           Concur.Core
 import           Concur.VDOM
 
 data RowData = RowData
-  { rowIdx :: !Int
-  , rowTitle :: !JSString
+  { rowIdx :: Int
+  , rowTitle :: JSString
   } deriving (Show, Eq)
 
 data Model = Model
-  { modelRows :: ![RowData]
-  , modelHighlightedRowIndex :: !(Maybe Int)
-  , modelLastIdx :: !Int
+  { modelRows :: V.Vector RowData
+  , modelHighlightedRowIndex :: Maybe Int
+  , modelLastIdx :: Int
   } deriving (Show, Eq)
 
 type Widget' a = StateT Model (Widget HTML) ()
@@ -50,20 +50,20 @@ data Action = CreateRows Int
             | RemoveRow Int
             deriving (Show, Eq)
 
-adjectives :: [JSString]
-adjectives = ["pretty", "large", "big", "small", "tall", "short", "long", "handsome",
+adjectives :: V.Vector JSString
+adjectives = V.fromList ["pretty", "large", "big", "small", "tall", "short", "long", "handsome",
                          "plain", "quaint", "clean", "elegant", "easy", "angry", "crazy", "helpful",
                          "mushy", "odd", "unsightly", "adorable", "important", "inexpensive",
                          "cheap", "expensive", "fancy"];
 
-colours :: [JSString]
-colours = ["red", "yellow", "blue", "green", "pink", "brown", "purple", "brown", "white", "black", "orange"];
+colours :: V.Vector JSString
+colours = V.fromList ["red", "yellow", "blue", "green", "pink", "brown", "purple", "brown", "white", "black", "orange"];
 
-nouns :: [JSString]
-nouns = ["table", "chair", "house", "bbq", "desk", "car", "pony", "cookie", "sandwich", "burger", "pizza", "mouse", "keyboard"];
+nouns :: V.Vector JSString
+nouns = V.fromList ["table", "chair", "house", "bbq", "desk", "car", "pony", "cookie", "sandwich", "burger", "pizza", "mouse", "keyboard"];
 
 initModel :: Model
-initModel = Model{modelRows=[], modelHighlightedRowIndex=Nothing, modelLastIdx=1}
+initModel = Model{modelRows=V.empty, modelHighlightedRowIndex=Nothing, modelLastIdx=1}
 
 main :: IO ()
 main = void $ do
@@ -71,42 +71,46 @@ main = void $ do
   runWidgetInBody $ flip execStateT initModel $ forever $ do
     m <- get
     axn <- lift $ viewModel m
-    m' <- liftIO $ updateModel axn m
+    m' <- lift $ updateModel axn m
     put m'
 
-updateModel :: Action -> Model -> IO Model
-updateModel (CreateRows n) model@Model{modelLastIdx=lastIdx} = do
+updateModel :: Action -> Model -> Widget HTML Model
+
+updateModel (CreateRows n) model@Model{modelLastIdx=lastIdx} = loadWithIO [E.div [A.class_ "loading"] [E.text "LOADING..."]] $ do
   newRows <- generateRows n lastIdx
   return model{modelRows=(newRows), modelLastIdx=(lastIdx + n)}
-updateModel (AppendRows n) model@Model{modelRows=existingRows, modelLastIdx=lastIdx} = do
+
+updateModel (AppendRows n) model@Model{modelRows=existingRows, modelLastIdx=lastIdx} = loadWithIO [E.div [A.class_ "loading"] [E.text "LOADING..."]] $ do
   newRows <- generateRows n (modelLastIdx model)
-  return model{modelRows=(existingRows ++ newRows), modelLastIdx=(lastIdx + n)}
-updateModel (ClearRows) model = return model{modelRows=[]}
+  return model{modelRows=(existingRows V.++ newRows), modelLastIdx=(lastIdx + n)}
+
+updateModel (ClearRows) model = return model{modelRows=V.empty}
+
 updateModel (UpdateRows n) model@Model{modelRows=currentRows} = return model{modelRows=updatedRows}
   where
-    updatedRows = map updateRow $ zip [0..] currentRows
-    updateRow (i,r) = if i `rem` n == 0 then r {rowTitle = rowTitle r <> "!!!"} else r
-updateModel SwapRows model@Model{modelRows=currentRows} =
-  return $ if (length currentRows >= 10)
-            then model{modelRows=swappedRows}
-            else model
-  where
-    swappedRows = f3 ++ (e9:e5r) ++ (e4:e10r)
-    (f3, (e4:e5r)) = splitAt 4 currentRows
-    (_f4, (e9:e10r)) = splitAt 4 e5r
-updateModel (HighlightRow idx) model = return model{modelHighlightedRowIndex=Just idx}
-updateModel (RemoveRow idx) model@Model{modelRows=currentRows} = return model{modelRows=(firstPart ++ (drop 1 remainingPart))}
-  where (firstPart, remainingPart) = splitAt idx currentRows
+    updatedRows = V.accumulate
+      (\r@RowData{rowTitle=rt} s -> r{rowTitle=(rt <> s)})
+      currentRows
+      (V.generate (quot (V.length currentRows) n) (\x -> (x*n, JSS.pack " !!!")))
 
-generateRows :: Int -> Int -> IO [RowData]
-generateRows n lastIdx = snd . genRows <$> R.newStdGen
+updateModel SwapRows model@Model{modelRows=currentRows} = return $
+  if (V.length currentRows >=10)
+  then model{modelRows=swappedRows}
+  else model
   where
-    genRows g = foldr genRow (g,[]) [0..n]
-    genRow i (g,p) =
-      let !(!adjIdx,   !g') = R.randomR (0, length adjectives - 1) g
-          !(!colIdx,  !g'') = R.randomR (0, length colours - 1) g'
-          !(!nonIdx, !g''') = R.randomR (0, length nouns - 1) g''
-      in (g''', (RowData{rowIdx=lastIdx+i, rowTitle=(adjectives!!adjIdx) <> " " <> (colours!!colIdx) <> " " <> (nouns!!nonIdx)}: p))
+    swappedRows = V.modify (\v -> MV.swap v 4 9) currentRows
+
+updateModel (HighlightRow idx) model = return model{modelHighlightedRowIndex=Just idx}
+
+updateModel (RemoveRow idx) model@Model{modelRows=currentRows} = return model{modelRows=(firstPart V.++ (V.drop 1 remainingPart))}
+  where (firstPart, remainingPart) = V.splitAt idx currentRows
+
+generateRows :: Int -> Int -> IO (V.Vector RowData)
+generateRows n lastIdx = V.generateM n $ \x -> do
+  adjIdx <- R.randomRIO (0, (V.length adjectives) - 1)
+  colorIdx <- R.randomRIO (0, (V.length colours) - 1)
+  nounIdx <- R.randomRIO (0, (V.length nouns) - 1)
+  pure RowData{rowIdx=(lastIdx + x), rowTitle=(adjectives V.! adjIdx) <> " " <> (colours V.! colorIdx) <> " " <> (nouns V.! nounIdx)}
 
 viewModel :: Model -> Widget HTML Action
 viewModel m = el E.div [A.id "main"]
@@ -123,11 +127,11 @@ viewTable :: Model -> Widget HTML Action
 viewTable m@Model{modelHighlightedRowIndex=idx} =
   el E.table [A.class_ "table table-hover table-striped test-data"]
   [
-    el E.tbody [A.id "tbody"] (map viewRow (zip [0..] $ modelRows m))
+    el E.tbody [A.id "tbody"] (V.toList $ V.imap viewRow (modelRows m))
   ]
   where
     conditionalDanger i = if (Just i==idx) then [A.class_ "danger", A.key i] else [A.key i]
-    viewRow (i,r) = el E.tr (conditionalDanger i)
+    viewRow i r = el E.tr (conditionalDanger i)
       [
         el E.td [A.class_ "col-md-1"] [text (show (rowIdx r))]
       , el E.td [A.class_ "col-md-4"]
